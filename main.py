@@ -7,6 +7,8 @@ from moviepy import VideoFileClip, AudioFileClip, concatenate_videoclips, ImageC
 from moviepy.video.fx import FadeIn, FadeOut, Resize
 import glob
 import time
+from PIL import Image, ImageDraw, ImageFont
+import textwrap
 random.seed(time.time())
 
 load_dotenv()
@@ -53,6 +55,41 @@ def get_gameplay(folder, length):
     final = concatenate_videoclips(clips).subclipped(0,length)
     return final
 
+def generate_title_card_png(
+    title_text,
+    output_path="titlecard.png",
+    width=1560,
+    font_path="C:/Windows/Fonts/arial.ttf",
+    font_size=110,
+    padding=40,
+    max_chars_per_line=28
+):
+    top = Image.open("top.png")
+    middle = Image.open("middle.png")
+    bottom = Image.open("bottom.png")
+
+    lines = textwrap.wrap(title_text, width=max_chars_per_line, break_long_words=False)
+    line_height = font_size + 20
+    text_height = line_height * len(lines)
+
+    stretched_middle = middle.resize((width, text_height+80))
+
+    total_height = top.height + stretched_middle.height + bottom.height
+    canvas = Image.new("RGBA", (width, total_height))
+    canvas.paste(top, (0, 0))
+    canvas.paste(stretched_middle, (0, top.height))
+    canvas.paste(bottom, (0, top.height + stretched_middle.height))
+
+    font = ImageFont.truetype(font_path, font_size)
+    draw = ImageDraw.Draw(canvas)
+    y = top.height + padding
+    for line in lines:
+        draw.text((padding, y), line, font=font, fill="white")
+        y += line_height
+
+    canvas.save(output_path)
+    return output_path
+
 def build_video(stitle, sstory, title_audio_path, story_audio_path, output_path):
     text_to_speech(stitle, title_audio_path)
     text_to_speech(sstory, story_audio_path)
@@ -63,25 +100,10 @@ def build_video(stitle, sstory, title_audio_path, story_audio_path, output_path)
     total_length = title_audio.duration + story_audio.duration
     background_gameplay = get_gameplay(choose_vid_folder(),total_length)
 
-    base_card = (ImageClip('./titlecard.png')
+    title_card = (ImageClip('./titlecard.png')
                 .with_duration(title_audio.duration)
                 .with_position('center')
-                .with_effects([Resize(height=350), FadeIn(0.3), FadeOut(0.3)]))
-    
-    title_text = (
-        TextClip(
-            font="C:/Windows/Fonts/ARLRDBD.TTF",
-            text=stitle,
-            size=(int(base_card.w * 0.9), int(base_card.h * 0.7)),
-            color='white',
-            method='caption',
-            text_align='center',
-            duration=title_audio.duration,
-        )
-        .with_position(('center', int(base_card.h * 0.2)))
-    )
-
-    title_card = CompositeVideoClip([base_card, title_text]).with_effects([FadeIn(0.3), FadeOut(0.3)]).with_position('center')
+                .with_effects([Resize(0.4), FadeIn(0.3), FadeOut(0.3)]))
 
     audio = concatenate_audioclips([title_audio, story_audio])
 
@@ -93,6 +115,8 @@ def build_video(stitle, sstory, title_audio_path, story_audio_path, output_path)
 mp4_path = os.path.join(save_folder, "final_video.mp4")
 
 stitle, sstory, sid = get_random_story()
+
+generate_title_card_png(stitle)
 
 title_audio_path = os.path.join(save_folder, "title_audio.mp3")
 story_audio_path = os.path.join(save_folder, "story_audio.mp3")
