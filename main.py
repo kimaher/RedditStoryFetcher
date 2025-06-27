@@ -3,7 +3,7 @@ import random
 from gtts import gTTS
 from dotenv import load_dotenv
 import os
-from moviepy import VideoFileClip, AudioFileClip, concatenate_videoclips, ImageClip, CompositeVideoClip, concatenate_audioclips, TextClip
+from moviepy import VideoFileClip, AudioFileClip, concatenate_videoclips, ImageClip, CompositeVideoClip, concatenate_audioclips
 from moviepy.video.fx import FadeIn, FadeOut, Resize
 import glob
 import time
@@ -22,15 +22,32 @@ reddit = praw.Reddit(client_id=id, client_secret=secret, user_agent=agent)
 save_folder = "D:/Videos/GeneratedVids"
 os.makedirs(save_folder, exist_ok=True)
 
+def handle_comments(submission):
+    body = submission.selftext
+    submission.comment_sort = "top"
+    submission.comments.replace_more(limit=None)
+    t20 = submission.comments[:20]
+    stories = [com for com in t20 if len(com.body) > 250]
+    i = 1
+    while len(body) < 1000:
+        if not stories:
+            return None, None, None
+        comment = random.choice(stories)
+        stories.remove(comment)
+        body += f"\n\n{i}.\n{comment.body}"
+        i += 1
+    return submission.title, body, submission.id
+
 def get_random_story():
-    hostsub = random.choice(['offmychest', 'nosleep', 'creepypasta', 'shortscarystories', 'AmItheAsshole', 'confession', 'AskReddit'])
+    hostsub = random.choice(['all', 'offmychest', 'nosleep', 'creepypasta', 'shortscarystories', 'AmItheAsshole', 'confession', 'AskReddit'])
     subreddit = reddit.subreddit(hostsub).hot(limit=20)
     print(hostsub)
-    try:
-        submission = random.choice([sub for sub in subreddit if sub.selftext != ''])
-        return submission.title, submission.selftext, submission.id
-    except IndexError:
+    submission = random.choice([sub for sub in subreddit])
+    if len(submission.selftext) > 9000:
         return None, None, None
+    if submission.subreddit.display_name in ['AskReddit', 'AskMen', 'AskWomen']:
+        return handle_comments(submission)
+    return submission.title, submission.selftext, submission.id
     
 def text_to_speech(text, output_path):
     tts = gTTS(text=text, lang='en')
@@ -62,7 +79,7 @@ def generate_title_card_png(
     font_path="C:/Windows/Fonts/arial.ttf",
     font_size=110,
     padding=40,
-    max_chars_per_line=28
+    max_chars_per_line=26
 ):
     top = Image.open("top.png")
     middle = Image.open("middle.png")
@@ -113,12 +130,16 @@ def build_video(stitle, sstory, title_audio_path, story_audio_path, output_path)
     print(f"Final video saved as {output_path}")
 
 mp4_path = os.path.join(save_folder, "final_video.mp4")
-
-stitle, sstory, sid = get_random_story()
+stitle = None
+while not stitle:
+    stitle, sstory, sid = get_random_story()
 
 generate_title_card_png(stitle)
 
 title_audio_path = os.path.join(save_folder, "title_audio.mp3")
 story_audio_path = os.path.join(save_folder, "story_audio.mp3")
 
-build_video(stitle, sstory, title_audio_path, story_audio_path, mp4_path)
+
+text_to_speech(stitle, title_audio_path)
+text_to_speech(sstory, story_audio_path)
+#build_video(stitle, sstory, title_audio_path, story_audio_path, mp4_path)
