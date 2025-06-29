@@ -12,6 +12,8 @@ import boto3
 from pydub import AudioSegment
 from io import BytesIO
 import whisper_timestamped as whisper_ts
+import re
+from pydub.effects import speedup
 random.seed(time.time())
 
 load_dotenv()
@@ -25,6 +27,7 @@ region='us-east-2'
 gameplay_folder = os.getenv('ROOT_GAMEPLAY_FOLDER')
 arial_font_location = os.getenv('ARIAL_FONT_LOCATION')
 save_folder = os.getenv('SAVE_FOLDER_LOCATION')
+bad_words  = os.getenv("BAD_WORDS", "").split(",")
 
 polly = boto3.client(
     'polly',
@@ -53,12 +56,33 @@ def handle_comments(submission):
         i += 1
     return submission.title, body, submission.id
 
+def censor(text, bad_roots):
+    pattern = re.compile(
+        r'\w*(' + '|'.join(re.escape(root) for root in bad_roots) + r')\w*',
+        re.IGNORECASE
+    )
+
+    def censor_match(m):
+        word = m.group()
+        for root in bad_roots:
+            index = word.lower().find(root)
+            if index != -1:
+                censored = (
+                    word[:index] +  # prefix
+                    word[index] + '*' * (len(root) - 1) +  # censored root
+                    word[index + len(root):]  # suffix
+                )
+                return censored
+        return word
+
+    return pattern.sub(censor_match, text)
+
 def get_random_story():
-    hostsub = random.choice(['all', 'offmychest', 'nosleep', 'creepypasta', 'shortscarystories', 'confession', 'AskReddit'])
-    subreddit = reddit.subreddit(hostsub).hot(limit=20)
+    hostsub = random.choice(['offmychest', 'nosleep', 'creepypasta', 'shortscarystories', 'confession', 'AskReddit', 'TrueOffMyChest', 'TIFU'])
+    subreddit = reddit.subreddit(hostsub).top(limit=30, time_filter='month')
     print(hostsub)
     submission = random.choice([sub for sub in subreddit])
-    if len(submission.selftext) > 9000:
+    if len(submission.selftext) > 9000 or submission.stickied:
         return None, None, None
     if submission.subreddit.display_name in ['AskReddit', 'AskMen', 'AskWomen']:
         return handle_comments(submission)
@@ -102,7 +126,7 @@ def group_words(words):
         start_time = words[i]["start"]
         time = 0
         group = []
-        while time < 0.4:
+        while time < 0.35:
             end_time = words[i]["end"]
             group.append(words[i])
             i += 1
@@ -142,7 +166,9 @@ def text_to_speech(text, output_path):
         )
         combined += audio_chunk
         i += 1
-    combined.set_frame_rate(44100).set_sample_width(2).set_channels(1).export(output_path, format='wav')
+    combined = speedup(combined, 1.1)
+    combined = combined.set_frame_rate(44100).set_sample_width(2).set_channels(1)
+    combined.export(output_path, format='wav')
     print(f"✅ Final audio saved as {output_path}")
 
 
@@ -229,6 +255,9 @@ mp4_path = os.path.join(save_folder, "final_video.mp4")
 stitle = None
 while not stitle:
     stitle, sstory, sid = get_random_story()
+
+stitle = censor(stitle, bad_words)
+sstory = censor(sstory, bad_words)
 
 generate_title_card_png(stitle)
 
