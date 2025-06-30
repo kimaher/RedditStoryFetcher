@@ -2,7 +2,7 @@ import praw
 import random
 from dotenv import load_dotenv
 import os
-from moviepy import VideoFileClip, AudioFileClip, concatenate_videoclips, ImageClip, CompositeVideoClip, concatenate_audioclips, TextClip
+from moviepy import VideoFileClip, AudioFileClip, concatenate_videoclips, ImageClip, CompositeVideoClip, concatenate_audioclips, TextClip, CompositeAudioClip
 from moviepy.video.fx import FadeIn, FadeOut, Resize
 import glob
 import time
@@ -171,6 +171,15 @@ def text_to_speech(text, output_path):
     combined.export(output_path, format='wav')
     print(f"✅ Final audio saved as {output_path}")
 
+def get_music(length, path='D:/Videos/BackgroundG/backmusic.mp3'):
+    clips = []
+    total = 0
+    while total < length:
+        clip = AudioFileClip(path).with_volume_scaled(0.08)
+        clips.append(clip)
+        total += clip.duration
+    final = concatenate_audioclips(clips).subclipped(0, length)
+    return final
 
 def choose_vid_folder(root_folder=gameplay_folder):
     subfolders = [f.path for f in os.scandir(root_folder) if f.is_dir()]
@@ -234,6 +243,7 @@ def build_video(stitle, sstory, title_audio_path, story_audio_path, output_path)
 
     total_length = title_audio.duration + story_audio.duration
     background_gameplay = get_gameplay(choose_vid_folder(),total_length)
+    music = get_music(total_length)
 
     title_card = (ImageClip('./titlecard.png')
                 .with_duration(title_audio.duration)
@@ -245,8 +255,9 @@ def build_video(stitle, sstory, title_audio_path, story_audio_path, output_path)
     subtitles = make_phrase_clips(groups, title_audio.duration)
 
     audio = concatenate_audioclips([title_audio, story_audio])
+    final_audio = CompositeAudioClip([audio, music])
 
-    final_vid = CompositeVideoClip([background_gameplay.with_audio(audio), title_card.with_start(0)] + subtitles)
+    final_vid = CompositeVideoClip([background_gameplay.with_audio(final_audio), title_card.with_start(0)] + subtitles)
 
     final_vid.write_videofile(output_path, codec="libx264",threads=12,bitrate="8000k",fps=30)
     print(f"Final video saved as {output_path}")
