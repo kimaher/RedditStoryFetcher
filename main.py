@@ -14,6 +14,11 @@ from io import BytesIO
 import whisper_timestamped as whisper_ts
 import re
 from pydub.effects import speedup
+import google_auth_oauthlib.flow
+import googleapiclient.discovery
+from googleapiclient.http import MediaFileUpload
+from google.auth.transport.requests import Request
+import pickle
 random.seed(time.time())
 
 load_dotenv()
@@ -39,6 +44,57 @@ polly = boto3.client(
 reddit = praw.Reddit(client_id=id, client_secret=secret, user_agent=agent)
 
 os.makedirs(save_folder, exist_ok=True)
+
+scopes = ["https://www.googleapis.com/auth/youtube.upload"]
+
+def authenticate_youtube():
+    creds = None
+    if os.path.exists('token.pickle'):
+        with open('token.pickle', 'rb') as token:
+            creds = pickle.load(token)
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = google_auth_oauthlib.flow.InstalledAppFlow.from_client_secrets_file(
+                "client_secret.json", scopes
+            )
+            creds = flow.run_local_server(port=8080)
+        with open('token.pickle', 'wb') as token:
+            pickle.dump(creds, token)
+
+    return googleapiclient.discovery.build("youtube", "v3", credentials=creds)
+
+def upload_video(video_path, title, description, tags, category_id, privacy_status):
+    youtube = authenticate_youtube()
+
+    body = {
+        "snippet": {
+            "title": title,
+            "description": description,
+            "tags": tags,
+            "categoryId": category_id
+        },
+        "status": {
+            "privacyStatus": privacy_status
+        }
+    }
+
+    media = MediaFileUpload(video_path, chunksize=-1, resumable=True, mimetype='video/mp4')
+
+    request = youtube.videos().insert(
+        part="snippet,status",
+        body=body,
+        media_body=media
+    )
+
+    response = None
+    while response is None:
+        status, response = request.next_chunk()
+        if status:
+            print(f"Uploaded {int(status.progress() * 100)}%")
+    
+    print(f"✅ Upload complete: https://youtube.com/watch?v={response['id']}")
 
 def handle_comments(submission):
     body = submission.selftext
@@ -262,6 +318,17 @@ def build_video(stitle, sstory, title_audio_path, story_audio_path, output_path)
     final_vid.write_videofile(output_path, codec="libx264",threads=12,bitrate="8000k",fps=30)
     print(f"Final video saved as {output_path}")
 
+def truncate_title(title, max_length = 100):
+    title = title.strip()
+    if len(title) <= max_length:
+        return title
+    
+    cutoff = title[:max_length]
+    if " " in cutoff:
+        cutoff = cutoff.rsplit(" ", 1)[0]
+
+    return cutoff
+
 mp4_path = os.path.join(save_folder, "final_video.mp4")
 stitle = None
 while not stitle:
@@ -270,9 +337,13 @@ while not stitle:
 stitle = censor(stitle, bad_words)
 sstory = censor(sstory, bad_words)
 
+yttitle = truncate_title(stitle)
+
 generate_title_card_png(stitle)
 
 title_audio_path = os.path.join(save_folder, "title_audio.wav")
 story_audio_path = os.path.join(save_folder, "story_audio.wav")
 
 build_video(stitle, sstory, title_audio_path, story_audio_path, mp4_path)
+print(f"📝 Uploading with title: {repr(yttitle)}")
+upload_video(mp4_path, yttitle, stitle, ["redditstories", "stories", "satisfying", "minecraft"], "22", "unlisted")

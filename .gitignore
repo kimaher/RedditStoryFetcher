@@ -4,3 +4,5 @@
 .mp3
 save.py
 titlecard.png
+client_secret.json
+token.pickle
