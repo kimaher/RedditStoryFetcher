@@ -19,6 +19,7 @@ import googleapiclient.discovery
 from googleapiclient.http import MediaFileUpload
 from google.auth.transport.requests import Request
 import pickle
+from datetime import datetime, timedelta, timezone
 random.seed(time.time())
 
 load_dotenv()
@@ -65,20 +66,25 @@ def authenticate_youtube():
 
     return googleapiclient.discovery.build("youtube", "v3", credentials=creds)
 
-def upload_video(video_path, title, description, tags, category_id, privacy_status):
+def upload_video(video_path, title, description, category_id, privacy_status, upload_time):
     youtube = authenticate_youtube()
 
     body = {
         "snippet": {
             "title": title,
             "description": description,
-            "tags": tags,
+            "tags": ["redditstories", "stories", "satisfying", "minecraft"],
             "categoryId": category_id
         },
         "status": {
-            "privacyStatus": privacy_status
+            "privacyStatus": privacy_status,
+            "selfDeclaredMadeForKids": False
         }
     }
+
+    if privacy_status == "private" and upload_time:
+        body["status"]["publishAt"] = upload_time
+        print(f"⏰ Scheduled for: {upload_time}")
 
     media = MediaFileUpload(video_path, chunksize=-1, resumable=True, mimetype='video/mp4')
 
@@ -134,11 +140,11 @@ def censor(text, bad_roots):
     return pattern.sub(censor_match, text)
 
 def get_random_story():
-    hostsub = random.choice(['offmychest', 'nosleep', 'creepypasta', 'shortscarystories', 'confession', 'AskReddit', 'TrueOffMyChest', 'TIFU'])
-    subreddit = reddit.subreddit(hostsub).top(limit=30, time_filter='month')
+    hostsub = random.choice(['nosleep', 'offmychest', 'creepypasta', 'shortscarystories', 'confession', 'AskReddit', 'TrueOffMyChest', 'TIFU'])
+    subreddit = reddit.subreddit(hostsub).top(limit=20, time_filter='month')
     print(hostsub)
     submission = random.choice([sub for sub in subreddit])
-    if len(submission.selftext) > 9000 or submission.stickied:
+    if len(submission.selftext) > 15000 or submission.stickied:
         return None, None, None
     if submission.subreddit.display_name in ['AskReddit', 'AskMen', 'AskWomen']:
         return handle_comments(submission)
@@ -290,10 +296,45 @@ def generate_title_card_png(
     canvas.save(output_path)
     return output_path
 
-def build_video(stitle, sstory, title_audio_path, story_audio_path, output_path):
-    text_to_speech(stitle, title_audio_path)
-    text_to_speech(sstory, story_audio_path)
+def segment_by_rules(words, title_duration):
+    parts = []
+    i = 0
+    while i < len(words):
+        start = words[i]['start']
+        remain = words[i:]
+        end = remain[-1]['end']
+        time_left = end - start
 
+        if time_left > 240 - title_duration:
+            cutoff = start + 180 - title_duration - 2
+        elif time_left >= 180 - title_duration - 2:
+            cutoff = start + 120
+        else:
+            cutoff = end
+        
+        segment_words = []
+        while i < len(words) and words[i]['end'] <= cutoff:
+            segment_words.append(words[i])
+            i += 1
+        parts.append(segment_words)
+        print(f"added {i} words in this segment")
+    print(f"there are {len(parts)} segments")
+    return parts
+
+def export_audio_segments(segments, full_story, output_dir):
+    output_paths = []
+    i = 0
+    for words in segments:
+        start_ms = 0 if i == 0 else int(words[0]['start'] * 1000)
+        end_ms = int(words[-1]['end'] * 1000)
+        chunk = full_story[start_ms:] if i == len(segments) - 1 else full_story[start_ms:end_ms]
+        path = os.path.join(output_dir, f"story_audio{i}.wav")
+        chunk.export(path, format="wav")
+        output_paths.append(path)
+        i += 1
+    return output_paths
+
+def build_video(title_audio_path, story_audio_path, output_path):
     title_audio = AudioFileClip(title_audio_path)
     story_audio = AudioFileClip(story_audio_path)
 
@@ -329,7 +370,39 @@ def truncate_title(title, max_length = 100):
 
     return cutoff
 
-mp4_path = os.path.join(save_folder, "final_video.mp4")
+def finalize(title, story, title_audio_path, fulls_audio_path, save_folder):
+    text_to_speech(title, title_audio_path)
+    text_to_speech(story, fulls_audio_path)
+    title_audio = AudioSegment.from_wav(title_audio_path)
+    story_audio = AudioSegment.from_wav(story_audio_path)
+    story_words = transcribe_audio(story_audio_path)
+    segments = segment_by_rules(story_words, title_audio.duration_seconds)
+    audio_paths = export_audio_segments(segments, story_audio, save_folder)
+
+    video_paths = []
+    i = 0
+    while i < len(segments):
+        part_audio_path = audio_paths[i]
+        part_title = f"{('Part ' + str(i+1) + ': ') if i > 0 else ''}{title}"
+        yttitle = truncate_title(part_title)
+        generate_title_card_png(part_title)
+        part_output_path = os.path.join(save_folder, f"video_part{i+1}.mp4")
+        build_video(title_audio_path, part_audio_path, part_output_path)
+        video_paths.append((part_output_path, yttitle))
+        i += 1
+
+    i = 0
+    for (vpath, vtitle) in video_paths:
+        privacy = "public" if i == 0 else "private"
+        uploadt = None
+        hours = 12*i
+        if i != 0:
+            uploadt = (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat().replace("+00:00", "Z")
+
+        print(f"\n📝 Uploading {vtitle}...")
+        upload_video(vpath, vtitle, title, "22", privacy, uploadt)
+        i += 1
+
 stitle = None
 while not stitle:
     stitle, sstory, sid = get_random_story()
@@ -337,13 +410,7 @@ while not stitle:
 stitle = censor(stitle, bad_words)
 sstory = censor(sstory, bad_words)
 
-yttitle = truncate_title(stitle)
-
-generate_title_card_png(stitle)
-
 title_audio_path = os.path.join(save_folder, "title_audio.wav")
 story_audio_path = os.path.join(save_folder, "story_audio.wav")
 
-build_video(stitle, sstory, title_audio_path, story_audio_path, mp4_path)
-print(f"📝 Uploading with title: {repr(yttitle)}")
-upload_video(mp4_path, yttitle, stitle, ["redditstories", "stories", "satisfying", "minecraft"], "22", "unlisted")
+finalize(stitle, sstory, title_audio_path, story_audio_path, save_folder)
