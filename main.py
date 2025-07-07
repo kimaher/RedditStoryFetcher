@@ -139,12 +139,16 @@ def censor(text, bad_roots):
 
     return pattern.sub(censor_match, text)
 
-def get_random_story():
+def get_random_story(used_ids_path):
+    if not os.path.exists(used_ids_path):
+        open(used_ids_path, 'w').close()
+    with open(used_ids_path, 'r') as f:
+        used_ids = set(line.strip() for line in f.readlines())
     hostsub = random.choice(['nosleep', 'offmychest', 'creepypasta', 'shortscarystories', 'confession', 'AskReddit', 'TrueOffMyChest', 'TIFU'])
     subreddit = reddit.subreddit(hostsub).top(limit=20, time_filter='month')
     print(hostsub)
     submission = random.choice([sub for sub in subreddit])
-    if len(submission.selftext) > 15000 or submission.stickied:
+    if len(submission.selftext) > 12000 or submission.stickied or submission.id in used_ids:
         return None, None, None
     if submission.subreddit.display_name in ['AskReddit', 'AskMen', 'AskWomen']:
         return handle_comments(submission)
@@ -237,7 +241,7 @@ def get_music(length, path='D:/Videos/BackgroundG/backmusic.mp3'):
     clips = []
     total = 0
     while total < length:
-        clip = AudioFileClip(path).with_volume_scaled(0.08)
+        clip = AudioFileClip(path).with_volume_scaled(0.06)
         clips.append(clip)
         total += clip.duration
     final = concatenate_audioclips(clips).subclipped(0, length)
@@ -404,8 +408,11 @@ def finalize(title, story, title_audio_path, fulls_audio_path, save_folder):
         i += 1
 
 stitle = None
-while not stitle:
-    stitle, sstory, sid = get_random_story()
+used_ids_path = "used_ids.txt"
+attempts = 0
+while not stitle and attempts < 5:
+    stitle, sstory, sid = get_random_story(used_ids_path)
+    attempts += 1
 
 stitle = censor(stitle, bad_words)
 sstory = censor(sstory, bad_words)
@@ -414,3 +421,6 @@ title_audio_path = os.path.join(save_folder, "title_audio.wav")
 story_audio_path = os.path.join(save_folder, "story_audio.wav")
 
 finalize(stitle, sstory, title_audio_path, story_audio_path, save_folder)
+
+with open(used_ids_path, "a") as f:
+    f.write(sid + "\n")
