@@ -148,10 +148,12 @@ def get_random_story(used_ids_path):
     subreddit = reddit.subreddit(hostsub).top(limit=20, time_filter='month')
     print(hostsub)
     submission = random.choice([sub for sub in subreddit])
-    if len(submission.selftext) > 12000 or submission.stickied or submission.id in used_ids:
+    if len(submission.selftext) > 15000 or submission.stickied or submission.id in used_ids or submission.over_18:
         return None, None, None
     if submission.subreddit.display_name in ['AskReddit', 'AskMen', 'AskWomen']:
         return handle_comments(submission)
+    elif submission.selftext < 800:
+        return None, None, None
     return submission.title, submission.selftext, submission.id
 
 def make_phrase_clips(groups, title_length, font_path=arial_font_location):
