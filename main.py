@@ -144,7 +144,7 @@ def get_random_story(used_ids_path):
         open(used_ids_path, 'w').close()
     with open(used_ids_path, 'r') as f:
         used_ids = set(line.strip() for line in f.readlines())
-    hostsub = random.choice(['nosleep', 'offmychest', 'creepypasta', 'shortscarystories', 'confession', 'AskReddit', 'TrueOffMyChest', 'TIFU'])
+    hostsub = random.choice(['nosleep'])
     subreddit = reddit.subreddit(hostsub).top(limit=20, time_filter='month')
     print(hostsub)
     submission = random.choice([sub for sub in subreddit])
@@ -152,7 +152,7 @@ def get_random_story(used_ids_path):
         return None, None, None
     if submission.subreddit.display_name in ['AskReddit', 'AskMen', 'AskWomen']:
         return handle_comments(submission)
-    elif submission.selftext < 800:
+    elif len(submission.selftext) < 800:
         return None, None, None
     return submission.title, submission.selftext, submission.id
 
@@ -239,7 +239,9 @@ def text_to_speech(text, output_path):
     combined.export(output_path, format='wav')
     print(f"✅ Final audio saved as {output_path}")
 
-def get_music(length, path='D:/Videos/BackgroundG/backmusic.mp3'):
+def get_music(length, folder='D:/Videos/BackgroundG/'):
+    files = glob.glob(os.path.join(folder, "*.mp3"))
+    path = random.choice(files)
     clips = []
     total = 0
     while total < length:
@@ -426,3 +428,5 @@ finalize(stitle, sstory, title_audio_path, story_audio_path, save_folder)
 
 with open(used_ids_path, "a") as f:
     f.write(sid + "\n")
+
+#, 'offmychest', 'creepypasta', 'shortscarystories', 'confession', 'AskReddit', 'TrueOffMyChest', 'TIFU'
