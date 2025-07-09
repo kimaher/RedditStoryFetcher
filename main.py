@@ -102,7 +102,7 @@ def upload_video(video_path, title, description, category_id, privacy_status, up
     
     print(f"✅ Upload complete: https://youtube.com/watch?v={response['id']}")
 
-def handle_comments(submission):
+def handle_comments(submission, scary):
     body = submission.selftext
     submission.comment_sort = "top"
     submission.comments.replace_more(limit=None)
@@ -116,7 +116,7 @@ def handle_comments(submission):
         stories.remove(comment)
         body += f"\n\n{i}.\n{comment.body}"
         i += 1
-    return submission.title, body, submission.id
+    return submission.title, body, submission.id, scary
 
 def censor(text, bad_roots):
     pattern = re.compile(
@@ -144,17 +144,18 @@ def get_random_story(used_ids_path):
         open(used_ids_path, 'w').close()
     with open(used_ids_path, 'r') as f:
         used_ids = set(line.strip() for line in f.readlines())
-    hostsub = random.choice(['nosleep'])
+    hostsub = random.choice(['nosleep', 'pettyrevenge', 'shortscarystories', 'confession', 'AskReddit', 'TrueOffMyChest', 'TIFU', 'AmItheAsshole'])
     subreddit = reddit.subreddit(hostsub).top(limit=20, time_filter='month')
     print(hostsub)
+    scary = 1 if hostsub in ['nosleep', 'shortscarystories'] else 0
     submission = random.choice([sub for sub in subreddit])
     if len(submission.selftext) > 15000 or submission.stickied or submission.id in used_ids or submission.over_18:
-        return None, None, None
+        return None, None, None, None
     if submission.subreddit.display_name in ['AskReddit', 'AskMen', 'AskWomen']:
-        return handle_comments(submission)
+        return handle_comments(submission, scary)
     elif len(submission.selftext) < 800:
-        return None, None, None
-    return submission.title, submission.selftext, submission.id
+        return None, None, None, None
+    return submission.title, submission.selftext, submission.id, scary
 
 def make_phrase_clips(groups, title_length, font_path=arial_font_location):
     clips = []
@@ -239,7 +240,8 @@ def text_to_speech(text, output_path):
     combined.export(output_path, format='wav')
     print(f"✅ Final audio saved as {output_path}")
 
-def get_music(length, folder='D:/Videos/BackgroundG/'):
+def get_music(length, scary):
+    folder ='D:/Videos/BackgroundM/creepymusic/' if scary else 'D:/Videos/BackgroundM/normalmusic/'
     files = glob.glob(os.path.join(folder, "*.mp3"))
     path = random.choice(files)
     clips = []
@@ -342,13 +344,13 @@ def export_audio_segments(segments, full_story, output_dir):
         i += 1
     return output_paths
 
-def build_video(title_audio_path, story_audio_path, output_path):
+def build_video(title_audio_path, story_audio_path, output_path, scary):
     title_audio = AudioFileClip(title_audio_path)
     story_audio = AudioFileClip(story_audio_path)
 
     total_length = title_audio.duration + story_audio.duration
     background_gameplay = get_gameplay(choose_vid_folder(),total_length)
-    music = get_music(total_length)
+    music = get_music(total_length, scary)
 
     title_card = (ImageClip('./titlecard.png')
                 .with_duration(title_audio.duration)
@@ -378,7 +380,7 @@ def truncate_title(title, max_length = 100):
 
     return cutoff
 
-def finalize(title, story, title_audio_path, fulls_audio_path, save_folder):
+def finalize(title, story, title_audio_path, fulls_audio_path, save_folder, scary):
     text_to_speech(title, title_audio_path)
     text_to_speech(story, fulls_audio_path)
     title_audio = AudioSegment.from_wav(title_audio_path)
@@ -395,7 +397,7 @@ def finalize(title, story, title_audio_path, fulls_audio_path, save_folder):
         yttitle = truncate_title(part_title)
         generate_title_card_png(part_title)
         part_output_path = os.path.join(save_folder, f"video_part{i+1}.mp4")
-        build_video(title_audio_path, part_audio_path, part_output_path)
+        build_video(title_audio_path, part_audio_path, part_output_path, scary)
         video_paths.append((part_output_path, yttitle))
         i += 1
 
@@ -415,7 +417,7 @@ stitle = None
 used_ids_path = "used_ids.txt"
 attempts = 0
 while not stitle and attempts < 5:
-    stitle, sstory, sid = get_random_story(used_ids_path)
+    stitle, sstory, sid, scary = get_random_story(used_ids_path)
     attempts += 1
 
 stitle = censor(stitle, bad_words)
@@ -424,9 +426,7 @@ sstory = censor(sstory, bad_words)
 title_audio_path = os.path.join(save_folder, "title_audio.wav")
 story_audio_path = os.path.join(save_folder, "story_audio.wav")
 
-finalize(stitle, sstory, title_audio_path, story_audio_path, save_folder)
+finalize(stitle, sstory, title_audio_path, story_audio_path, save_folder, scary)
 
 with open(used_ids_path, "a") as f:
     f.write(sid + "\n")
-
-#, 'offmychest', 'creepypasta', 'shortscarystories', 'confession', 'AskReddit', 'TrueOffMyChest', 'TIFU'
