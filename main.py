@@ -66,7 +66,7 @@ def authenticate_youtube():
 
     return googleapiclient.discovery.build("youtube", "v3", credentials=creds)
 
-def upload_video(video_path, title, description, category_id, privacy_status, upload_time):
+def upload_video(video_path, title, description, category_id, privacy_status, upload_time, t_path):
     youtube = authenticate_youtube()
 
     body = {
@@ -99,8 +99,20 @@ def upload_video(video_path, title, description, category_id, privacy_status, up
         status, response = request.next_chunk()
         if status:
             print(f"Uploaded {int(status.progress() * 100)}%")
-    
-    print(f"✅ Upload complete: https://youtube.com/watch?v={response['id']}")
+
+    video_id = response['id']
+    print(f"✅ Upload complete: https://youtube.com/watch?v={video_id}")
+
+    if t_path:
+        try:
+            thumb_request = youtube.thumbnails().set(
+                videoId=video_id,
+                media_body=MediaFileUpload(t_path)
+            )
+            thumb_response = thumb_request.execute()
+            print("🖼️  Thumbnail uploaded successfully.")
+        except Exception as e:
+            print("⚠️  Thumbnail upload failed:", e)
 
 def handle_comments(submission, scary):
     body = submission.selftext
@@ -144,12 +156,12 @@ def get_random_story(used_ids_path):
         open(used_ids_path, 'w').close()
     with open(used_ids_path, 'r') as f:
         used_ids = set(line.strip() for line in f.readlines())
-    hostsub = random.choice(['nosleep', 'pettyrevenge', 'shortscarystories', 'confession', 'AskReddit', 'TrueOffMyChest', 'TIFU', 'AmItheAsshole'])
+    hostsub = random.choice(['nosleep'])
     subreddit = reddit.subreddit(hostsub).top(limit=20, time_filter='month')
     print(hostsub)
     scary = 1 if hostsub in ['nosleep', 'shortscarystories'] else 0
     submission = random.choice([sub for sub in subreddit])
-    if len(submission.selftext) > 15000 or submission.stickied or submission.id in used_ids or submission.over_18:
+    if len(submission.selftext) > 12000 or submission.stickied or submission.id in used_ids or submission.over_18:
         return None, None, None, None
     if submission.subreddit.display_name in ['AskReddit', 'AskMen', 'AskWomen']:
         return handle_comments(submission, scary)
@@ -306,6 +318,26 @@ def generate_title_card_png(
     canvas.save(output_path)
     return output_path
 
+def long_vids(words, title_duration):
+    parts = []
+    start = words[0]['start']
+    end = words[-1]['end']
+    length = end - start
+    if length >= 180 - title_duration - 2:
+        cutoff = start + 180 - title_duration - 2
+        print("There will be a long version of this story.")
+        parts.append(words)
+    else:
+        cutoff = end
+    
+    segment_words = []
+    i = 0
+    while i < len(words) and words[i]['end'] <= cutoff:
+        segment_words.append(words[i])
+        i += 1
+    parts.append(segment_words)
+    return parts
+
 def segment_by_rules(words, title_duration):
     parts = []
     i = 0
@@ -330,6 +362,21 @@ def segment_by_rules(words, title_duration):
         print(f"added {i} words in this segment")
     print(f"there are {len(parts)} segments")
     return parts
+
+def export_short_version(sections, full_story, output_dir, originalAudioPath):
+    output_paths = []
+    output_paths.append(originalAudioPath)
+    if len(sections) < 2:
+        return output_paths
+    words = sections[1]
+    start_ms = 0
+    end_ms = int(words[-1]['end'] * 1000)
+    chunk = full_story[start_ms:end_ms]
+    path = os.path.join(output_dir, "short_audio.wav")
+    chunk.export(path, format="wav")
+    output_paths.append(path)
+    return output_paths
+
 
 def export_audio_segments(segments, full_story, output_dir):
     output_paths = []
@@ -384,16 +431,19 @@ def finalize(title, story, title_audio_path, fulls_audio_path, save_folder, scar
     text_to_speech(title, title_audio_path)
     text_to_speech(story, fulls_audio_path)
     title_audio = AudioSegment.from_wav(title_audio_path)
-    story_audio = AudioSegment.from_wav(story_audio_path)
-    story_words = transcribe_audio(story_audio_path)
-    segments = segment_by_rules(story_words, title_audio.duration_seconds)
-    audio_paths = export_audio_segments(segments, story_audio, save_folder)
+    story_audio = AudioSegment.from_wav(fulls_audio_path)
+    story_words = transcribe_audio(fulls_audio_path)
+    segments = long_vids(story_words, title_audio.duration_seconds)
+    # segments = segment_by_rules(story_words, title_audio.duration_seconds)
+    # audio_paths = export_audio_segments(segments, story_audio, save_folder)
+    audio_paths = export_short_version(segments, story_audio, save_folder, fulls_audio_path)
 
     video_paths = []
     i = 0
     while i < len(segments):
         part_audio_path = audio_paths[i]
-        part_title = f"{('Part ' + str(i+1) + ': ') if i > 0 else ''}{title}"
+        # part_title = f"{('Part ' + str(i+1) + ': ') if i > 0 else ''}{title}"
+        part_title = f"{'[FULL STORY] ' if i == 0 and len(segments) > 1 else ''}{title}"
         yttitle = truncate_title(part_title)
         generate_title_card_png(part_title)
         part_output_path = os.path.join(save_folder, f"video_part{i+1}.mp4")
@@ -403,14 +453,16 @@ def finalize(title, story, title_audio_path, fulls_audio_path, save_folder, scar
 
     i = 0
     for (vpath, vtitle) in video_paths:
-        privacy = "public" if i == 0 else "private"
+        # privacy = "public" if i == 0 else "private"
+        privacy = "public"
         uploadt = None
-        hours = 12*i
-        if i != 0:
-            uploadt = (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat().replace("+00:00", "Z")
+        # hours = 12*i
+        # if i != 0:
+        #     uploadt = (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat().replace("+00:00", "Z")
+        thumbnail_path = "titlecard.png" if len(video_paths) > 1 and i == 0 else None
 
         print(f"\n📝 Uploading {vtitle}...")
-        upload_video(vpath, vtitle, title, "22", privacy, uploadt)
+        upload_video(vpath, vtitle, title, "22", privacy, uploadt, thumbnail_path)
         i += 1
 
 stitle = None
@@ -430,3 +482,4 @@ finalize(stitle, sstory, title_audio_path, story_audio_path, save_folder, scary)
 
 with open(used_ids_path, "a") as f:
     f.write(sid + "\n")
+#, 'pettyrevenge', 'shortscarystories', 'confession', 'AskReddit', 'TrueOffMyChest', 'TIFU', 'AmItheAsshole'
