@@ -19,7 +19,7 @@ import googleapiclient.discovery
 from googleapiclient.http import MediaFileUpload
 from google.auth.transport.requests import Request
 import pickle
-from datetime import datetime, timedelta, timezone
+#from datetime import datetime, timedelta, timezone
 random.seed(time.time())
 
 load_dotenv()
@@ -114,7 +114,7 @@ def upload_video(video_path, title, description, category_id, privacy_status, up
         except Exception as e:
             print("⚠️  Thumbnail upload failed:", e)
 
-def handle_comments(submission, scary):
+def handle_comments(submission, scary, poster):
     body = submission.selftext
     submission.comment_sort = "top"
     submission.comments.replace_more(limit=None)
@@ -123,12 +123,12 @@ def handle_comments(submission, scary):
     i = 1
     while len(body) < 1000:
         if not stories:
-            return None, None, None
+            return None, None, None, None, None
         comment = random.choice(stories)
         stories.remove(comment)
         body += f"\n\n{i}.\n{comment.body}"
         i += 1
-    return submission.title, body, submission.id, scary
+    return submission.title, body, submission.id, scary, poster
 
 def censor(text, bad_roots):
     pattern = re.compile(
@@ -156,18 +156,18 @@ def get_random_story(used_ids_path):
         open(used_ids_path, 'w').close()
     with open(used_ids_path, 'r') as f:
         used_ids = set(line.strip() for line in f.readlines())
-    hostsub = random.choice(['nosleep'])
+    hostsub = random.choice(['nosleep', 'pettyrevenge', 'shortscarystories', 'confession', 'AskReddit', 'TrueOffMyChest', 'TIFU', 'AmItheAsshole'])
     subreddit = reddit.subreddit(hostsub).top(limit=20, time_filter='month')
     print(hostsub)
     scary = 1 if hostsub in ['nosleep', 'shortscarystories'] else 0
     submission = random.choice([sub for sub in subreddit])
     if len(submission.selftext) > 12000 or submission.stickied or submission.id in used_ids or submission.over_18:
-        return None, None, None, None
+        return None, None, None, None, None
     if submission.subreddit.display_name in ['AskReddit', 'AskMen', 'AskWomen']:
-        return handle_comments(submission, scary)
+        return handle_comments(submission, scary, submission.author.name)
     elif len(submission.selftext) < 800:
-        return None, None, None, None
-    return submission.title, submission.selftext, submission.id, scary
+        return None, None, None, None, None
+    return submission.title, submission.selftext, submission.id, scary, submission.author.name
 
 def make_phrase_clips(groups, title_length, font_path=arial_font_location):
     clips = []
@@ -323,8 +323,8 @@ def long_vids(words, title_duration):
     start = words[0]['start']
     end = words[-1]['end']
     length = end - start
-    if length >= 180 - title_duration - 2:
-        cutoff = start + 180 - title_duration - 2
+    if length >= 180 - title_duration - 1:
+        cutoff = start + 180 - title_duration - 1
         print("There will be a long version of this story.")
         parts.append(words)
     else:
@@ -402,7 +402,7 @@ def build_video(title_audio_path, story_audio_path, output_path, scary):
     title_card = (ImageClip('./titlecard.png')
                 .with_duration(title_audio.duration)
                 .with_position('center')
-                .with_effects([Resize(0.4), FadeIn(0.3), FadeOut(0.3)]))
+                .with_effects([Resize(lambda t: 0.35 + 0.08 * (t / title_audio.duration)), FadeIn(0.3), FadeOut(0.3)]))
     
     whisper_results = transcribe_audio(story_audio_path)
     groups = group_words(whisper_results)
@@ -427,7 +427,7 @@ def truncate_title(title, max_length = 100):
 
     return cutoff
 
-def finalize(title, story, title_audio_path, fulls_audio_path, save_folder, scary):
+def finalize(title, story, title_audio_path, fulls_audio_path, save_folder, scary, poster):
     text_to_speech(title, title_audio_path)
     text_to_speech(story, fulls_audio_path)
     title_audio = AudioSegment.from_wav(title_audio_path)
@@ -452,6 +452,7 @@ def finalize(title, story, title_audio_path, fulls_audio_path, save_folder, scar
         i += 1
 
     i = 0
+    title = f"{title} by {poster}"
     for (vpath, vtitle) in video_paths:
         # privacy = "public" if i == 0 else "private"
         privacy = "public"
@@ -469,7 +470,7 @@ stitle = None
 used_ids_path = "used_ids.txt"
 attempts = 0
 while not stitle and attempts < 5:
-    stitle, sstory, sid, scary = get_random_story(used_ids_path)
+    stitle, sstory, sid, scary, author = get_random_story(used_ids_path)
     attempts += 1
 
 stitle = censor(stitle, bad_words)
@@ -478,8 +479,7 @@ sstory = censor(sstory, bad_words)
 title_audio_path = os.path.join(save_folder, "title_audio.wav")
 story_audio_path = os.path.join(save_folder, "story_audio.wav")
 
-finalize(stitle, sstory, title_audio_path, story_audio_path, save_folder, scary)
+finalize(stitle, sstory, title_audio_path, story_audio_path, save_folder, scary, author)
 
 with open(used_ids_path, "a") as f:
     f.write(sid + "\n")
-#, 'pettyrevenge', 'shortscarystories', 'confession', 'AskReddit', 'TrueOffMyChest', 'TIFU', 'AmItheAsshole'
