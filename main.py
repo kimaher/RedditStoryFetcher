@@ -8,7 +8,8 @@ import glob
 import time
 from PIL import Image, ImageDraw, ImageFont
 import textwrap
-import boto3
+# import boto3
+from elevenlabs import generate, set_api_key
 from pydub import AudioSegment
 from io import BytesIO
 import whisper_timestamped as whisper_ts
@@ -19,6 +20,7 @@ import googleapiclient.discovery
 from googleapiclient.http import MediaFileUpload
 from google.auth.transport.requests import Request
 import pickle
+from openai import OpenAI
 #from datetime import datetime, timedelta, timezone
 random.seed(time.time())
 
@@ -32,15 +34,22 @@ amazon_secret=os.getenv('AMAZON_POLLY_SECRET')
 region='us-east-2'
 gameplay_folder = os.getenv('ROOT_GAMEPLAY_FOLDER')
 arial_font_location = os.getenv('ARIAL_FONT_LOCATION')
+lucky_font_location = os.getenv('LUCKY_FONT_LOCATION')
 save_folder = os.getenv('SAVE_FOLDER_LOCATION')
 bad_words  = os.getenv("BAD_WORDS", "").split(",")
+eleven_key = os.getenv("ELEVEN_API_KEY")
+openai_key = os.getenv("OPENAI_API_KEY")
 
-polly = boto3.client(
-    'polly',
-    aws_access_key_id=amazon_id,
-    aws_secret_access_key=amazon_secret,
-    region_name=region
-)
+client = OpenAI(api_key=openai_key)
+
+# polly = boto3.client(
+#     'polly',
+#     aws_access_key_id=amazon_id,
+#     aws_secret_access_key=amazon_secret,
+#     region_name=region
+# )
+
+set_api_key(eleven_key)
 
 reddit = praw.Reddit(client_id=id, client_secret=secret, user_agent=agent)
 
@@ -53,14 +62,15 @@ def authenticate_youtube():
     if os.path.exists('token.pickle'):
         with open('token.pickle', 'rb') as token:
             creds = pickle.load(token)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
+    if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
-        else:
-            flow = google_auth_oauthlib.flow.InstalledAppFlow.from_client_secrets_file(
-                "client_secret.json", scopes
-            )
-            creds = flow.run_local_server(port=8080)
+            with open('token.pickle', 'wb') as token:
+                pickle.dump(creds, token)
+    if not creds or not creds.valid:
+        flow = google_auth_oauthlib.flow.InstalledAppFlow.from_client_secrets_file(
+            "client_secret.json", scopes
+        )
+        creds = flow.run_local_server(port=8080)
         with open('token.pickle', 'wb') as token:
             pickle.dump(creds, token)
 
@@ -73,7 +83,7 @@ def upload_video(video_path, title, description, category_id, privacy_status, up
         "snippet": {
             "title": title,
             "description": description,
-            "tags": ["redditstories", "stories", "satisfying", "minecraft"],
+            "tags": ["redditstories", "stories", "satisfying", "viral"],
             "categoryId": category_id
         },
         "status": {
@@ -114,7 +124,60 @@ def upload_video(video_path, title, description, category_id, privacy_status, up
         except Exception as e:
             print("⚠️  Thumbnail upload failed:", e)
 
-def handle_comments(submission, scary, poster):
+def clean_text(text):
+    text = re.sub(r"\*", '', text)
+    text = re.sub(r'https?://\S+|www\.\S+', '', text)
+    return text
+
+SENSITIVE_TERMS = {
+    "rape": "SA",
+    "rapist": "SA-er",
+    "raped": "SA'd",
+    "rapes": "SA's",
+    "bomb": "payload",
+    "bombs": "payloads",
+    "bombed": "attacked",
+    "bombing": "attacking",
+    "asshole": "a-hole",
+    "assholes": "a-holes",
+    "incest": "inappropriate family relations",
+    "suicide": "unalive",
+    "kill": "unalive",
+    "killed": "unalived",
+    "killing": "unaliving",
+    "kills": "unalives",
+    "suicidal": "depressed",
+    "self-harm": "SH",
+    "overdose": "OD",
+    "overdosed": "OD'd",
+    "molest": "touch",
+    "molested": "touched",
+    "molester": "creep",
+    "molestation": "touching",
+    "murder": "unalive",
+    "murdered": "unalived",
+    "murdering": "unaliving",
+    "murders": "unalives",
+    "corpse": "body",
+    "sex": "fun time",
+    "porn": "explicit content",
+    "pedophile": "child predator",
+    "pedophilia": "child predation",
+    "terrorism": "extremism",
+    "terrorist": "extremist",
+    "terrorists": "extremists"
+}
+
+def censor_sensitive(text, terms=SENSITIVE_TERMS):
+    pattern_pairs = [
+        (re.compile(rf'\b{re.escape(term)}\b', re.IGNORECASE), replacement)
+        for term, replacement in terms.items()
+    ]
+    for oldword,newword in pattern_pairs:
+        text = oldword.sub(newword, text)
+    return text
+
+def handle_comments(submission, scary, guess):
     body = submission.selftext
     submission.comment_sort = "top"
     submission.comments.replace_more(limit=None)
@@ -128,7 +191,7 @@ def handle_comments(submission, scary, poster):
         stories.remove(comment)
         body += f"\n\n{i}.\n{comment.body}"
         i += 1
-    return submission.title, body, submission.id, scary, poster
+    return submission.title, body, submission.id, scary, guess
 
 def censor(text, bad_roots):
     pattern = re.compile(
@@ -151,25 +214,35 @@ def censor(text, bad_roots):
 
     return pattern.sub(censor_match, text)
 
+# def get_random_story(x):
+#     with open("mystory.txt", "r", encoding="utf-8") as f:
+#         story = f.read().strip()
+#     with open("mytitle.txt", "r", encoding="utf-8") as f:
+#         title = f.read().strip()
+#     author = "DesperateTie3312"
+#     return title, story, None, 0, author
+
 def get_random_story(used_ids_path):
     if not os.path.exists(used_ids_path):
         open(used_ids_path, 'w').close()
     with open(used_ids_path, 'r') as f:
         used_ids = set(line.strip() for line in f.readlines())
-    hostsub = random.choice(['nosleep', 'pettyrevenge', 'shortscarystories', 'confession', 'AskReddit', 'TrueOffMyChest', 'TIFU', 'AmItheAsshole'])
-    subreddit = reddit.subreddit(hostsub).top(limit=20, time_filter='month')
+    hostsub = random.choice(['nosleep', 'scarystories', 'tifu', 'AITAH', 'stories'])
+    subreddit = reddit.subreddit(hostsub).top(limit=20, time_filter="week")
     print(hostsub)
-    scary = 1 if hostsub in ['nosleep', 'shortscarystories'] else 0
+    scary = 1 if hostsub in ['nosleep', 'scarystories'] else 0
     submission = random.choice([sub for sub in subreddit])
-    if len(submission.selftext) > 12000 or submission.stickied or submission.id in used_ids or submission.over_18:
+    if len(submission.selftext) > 3500 or submission.stickied or submission.id in used_ids or submission.over_18:
         return None, None, None, None, None
     if submission.subreddit.display_name in ['AskReddit', 'AskMen', 'AskWomen']:
-        return handle_comments(submission, scary, submission.author.name)
-    elif len(submission.selftext) < 800:
+        return handle_comments(submission, scary, "Male")
+    elif len(submission.selftext) < 600:
         return None, None, None, None, None
-    return submission.title, submission.selftext, submission.id, scary, submission.author.name
+    nstory = transform_story(submission.selftext)
+    ntitle = improve_title(nstory)
+    return ntitle, nstory, submission.id, scary, submission.author.name
 
-def make_phrase_clips(groups, title_length, font_path=arial_font_location):
+def make_phrase_clips(groups, title_length, font_path=lucky_font_location):
     clips = []
     for group in groups:
         i = 0
@@ -207,7 +280,7 @@ def group_words(words):
         start_time = words[i]["start"]
         time = 0
         group = []
-        while time < 0.35:
+        while time < 0.30:
             end_time = words[i]["end"]
             group.append(words[i])
             i += 1
@@ -227,27 +300,34 @@ def group_words(words):
         })
     return grouped
 
-def text_to_speech(text, output_path):
-    chunks = textwrap.wrap(text, width=2900, break_long_words=False, break_on_hyphens=False)
+def text_to_speech(text, output_path, voice):
+    chunks = textwrap.wrap(text, width=800, break_long_words=False, break_on_hyphens=False)
     combined = AudioSegment.empty()
     i = 1
     for chunk in chunks:
         print(f"🧩 Processing chunk {i}/{len(chunks)}...")
-        response = polly.synthesize_speech(
-            Text=chunk,
-            OutputFormat='pcm',
-            VoiceId='Matthew'
+        # response = polly.synthesize_speech(
+        #     Text=chunk,
+        #     OutputFormat='pcm',
+        #     VoiceId='Matthew'
+        # )
+
+        # audio_bytes = BytesIO(response["AudioStream"].read())
+        # audio_chunk = AudioSegment(
+        #     data=audio_bytes.read(),
+        #     sample_width=2,
+        #     frame_rate=16000,
+        #     channels=1
+        # )
+        response = generate(
+            text=chunk,
+            voice=voice,
+            model="eleven_turbo_v2"
         )
-        audio_bytes = BytesIO(response["AudioStream"].read())
-        audio_chunk = AudioSegment(
-            data=audio_bytes.read(),
-            sample_width=2,
-            frame_rate=16000,
-            channels=1
-        )
+        audio_chunk = AudioSegment.from_file(BytesIO(response), format="mp3")
         combined += audio_chunk
         i += 1
-    combined = speedup(combined, 1.1)
+    combined = speedup(combined, 1.20)
     combined = combined.set_frame_rate(44100).set_sample_width(2).set_channels(1)
     combined.export(output_path, format='wav')
     print(f"✅ Final audio saved as {output_path}")
@@ -259,15 +339,15 @@ def get_music(length, scary):
     clips = []
     total = 0
     while total < length:
-        clip = AudioFileClip(path).with_volume_scaled(0.06)
+        clip = AudioFileClip(path).with_volume_scaled(0.05)
         clips.append(clip)
         total += clip.duration
     final = concatenate_audioclips(clips).subclipped(0, length)
     return final
 
 def choose_vid_folder(root_folder=gameplay_folder):
-    subfolders = [f.path for f in os.scandir(root_folder) if f.is_dir()]
-    return random.choice(subfolders)
+    subfolder = os.path.join(root_folder, "Satisfy/")
+    return subfolder
 
 def get_gameplay(folder, length):
     files = glob.glob(os.path.join(folder, "*.mp4"))
@@ -323,8 +403,8 @@ def long_vids(words, title_duration):
     start = words[0]['start']
     end = words[-1]['end']
     length = end - start
-    if length >= 180 - title_duration - 1:
-        cutoff = start + 180 - title_duration - 1
+    if length >= 180 - title_duration - 1.5:
+        cutoff = start + 180 - title_duration - 1.5
         print("There will be a long version of this story.")
         parts.append(words)
     else:
@@ -377,7 +457,6 @@ def export_short_version(sections, full_story, output_dir, originalAudioPath):
     output_paths.append(path)
     return output_paths
 
-
 def export_audio_segments(segments, full_story, output_dir):
     output_paths = []
     i = 0
@@ -428,8 +507,14 @@ def truncate_title(title, max_length = 100):
     return cutoff
 
 def finalize(title, story, title_audio_path, fulls_audio_path, save_folder, scary, poster):
-    text_to_speech(title, title_audio_path)
-    text_to_speech(story, fulls_audio_path)
+    gender = guess_story_gender(story)
+    print(gender)
+    if gender == "Male":
+        voice = random.choice(["pNInz6obpgDQGcFmaJgB", "ErXwobaYiN019PkySvjV", "VR6AewLTigWG4xSOukaG", "TX3LPaxmHKxFdv7VOQHJ", "bIHbv24MWmeRgasZH58o"])
+    else:
+        voice = random.choice(["FGY2WhTYpPnrIDTdsKH5", "AZnzlk1XvdvUeBnXmlld", "oWAxZDx7w5VEj9dCyTzz", "cgSgspJ2msm6clMCkdW9", "21m00Tcm4TlvDq8ikWAM"])
+    text_to_speech(title, title_audio_path, voice)
+    text_to_speech(story, fulls_audio_path, voice)
     title_audio = AudioSegment.from_wav(title_audio_path)
     story_audio = AudioSegment.from_wav(fulls_audio_path)
     story_words = transcribe_audio(fulls_audio_path)
@@ -452,7 +537,7 @@ def finalize(title, story, title_audio_path, fulls_audio_path, save_folder, scar
         i += 1
 
     i = 0
-    title = f"{title} by {poster}"
+    title = f"\"{title}\" \n Post by u/{poster}."
     for (vpath, vtitle) in video_paths:
         # privacy = "public" if i == 0 else "private"
         privacy = "public"
@@ -466,20 +551,109 @@ def finalize(title, story, title_audio_path, fulls_audio_path, save_folder, scar
         upload_video(vpath, vtitle, title, "22", privacy, uploadt, thumbnail_path)
         i += 1
 
+def transform_story(original_text):
+    prompt = (
+        "Here's a Reddit story:\n\n"
+        f"{original_text}\n\n"
+        "Reword this story in a way that keeps the same emotional arc and narrative flow. "
+        "Try to keep the same tone, mood, and writing style of the original story. You can change names and fine details but keep gender and scene the same."
+        f"The original story is approximately {len(original_text)} characters long. "
+        "Your rewritten story should be at least 95 percent of that length—do not shorten, condense, or leave out detail. "
+        "Absolutely do not include any extra commentary or explanation or title. Just return the story as plain text. "
+        "The goal is to make this safe to narrate and copyright-free and post it directly to youtube."
+    )
+
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": "You are a Reddit user who is sharing a personal experience online."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.9
+    )
+
+    return response.choices[0].message.content
+
+def improve_title(text):
+    prompt = (
+        f"Here's a Reddit story:\n\n '{text}'\n\n"
+        "Create a reddit-style short single question prompt that may have resulted in the creation of this story."
+        "Return only the question prompt. Please do not add any quotation marks or comments. Just return the reddit title as text"
+    )
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "You are a seasoned Redditor who specializes in crafting captivating, emotionally resonant question-style prompts that invite thoughtful responses from the community."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.8
+    )
+
+    return response.choices[0].message.content.strip()
+
+def improve_title1(text):
+    prompt = (
+        f"Here's a Reddit story:\n\n '{text}'\n\n"
+        "Create a simple title for this story. If its a scary story create an eriee title that you would see on r/nosleep."
+        "If its a story about the poster wondering of they are in the wrong. In the title put AITA for whatever the story is about like you would see on r/AITAH"
+        "Return only the title in plain text. Absolutely do not add quotation marks or comments."
+    )
+
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": "You are a seasoned Redditor who specializes in crafting captivating, emotionally resonant question-style prompts that invite thoughtful responses from the community."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.8
+    )
+
+    return response.choices[0].message.content.strip()
+
+def guess_story_gender(story_text):
+    prompt = (
+        "Based on the tone, language, and details in the following story, "
+        "guess the gender of the person who wrote it. Only respond with one of the following: "
+        "'Male' or 'Female'. If you're unsure, make your best guess.\n\n"
+        f"{story_text}"
+    )
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "You are using logic to determine whether the speaker of a story is Male or Female"},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.2
+    )
+
+    gender_guess = response.choices[0].message.content.strip()
+    return gender_guess
+
+def clean(text, bad):
+    text = censor(text, bad)
+    text = censor_sensitive(text)
+    text = clean_text(text)
+    return text
+
 stitle = None
 used_ids_path = "used_ids.txt"
 attempts = 0
 while not stitle and attempts < 5:
-    stitle, sstory, sid, scary, author = get_random_story(used_ids_path)
+    stitle, sstory, sid, scary, gender = get_random_story(used_ids_path)
     attempts += 1
 
-stitle = censor(stitle, bad_words)
-sstory = censor(sstory, bad_words)
+stitle = clean(stitle, bad_words)
+sstory = clean(sstory, bad_words)
 
 title_audio_path = os.path.join(save_folder, "title_audio.wav")
 story_audio_path = os.path.join(save_folder, "story_audio.wav")
 
-finalize(stitle, sstory, title_audio_path, story_audio_path, save_folder, scary, author)
+finalize(stitle, sstory, title_audio_path, story_audio_path, save_folder, scary, gender)
 
-with open(used_ids_path, "a") as f:
-    f.write(sid + "\n")
+if sid:
+    with open(used_ids_path, "a") as f:
+        f.write(sid + "\n")
+
+#print("-------------------------\n" + stitle + "\n\n" + sstory + gender)
